@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
 from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
@@ -9,7 +10,26 @@ from google import genai
 
 st.set_page_config(page_title="AI Expense & Receipt RAG", layout="wide")
 st.title("💳 AI Personal Finance & Receipt Analyzer (Hybrid RAG)")
-st.caption("Upload your bank statement (CSV) and PDF bills/warranties to analyze spending and search documents.")
+st.caption("Upload any Indian bank statement (CSV) and PDF bills/warranties for full expense breakdown and document search.")
+
+# Smart CSV Parser to skip bank header metadata rows automatically
+def load_indian_bank_csv(uploaded_file):
+    raw_bytes = uploaded_file.getvalue()
+    text = raw_bytes.decode("utf-8", errors="ignore")
+    lines = text.splitlines()
+    
+    # Find the row where the actual transaction table starts (usually has most commas/columns)
+    header_idx = 0
+    max_cols = 0
+    for i, line in enumerate(lines[:30]):
+        cols = len(line.split(","))
+        if cols > max_cols:
+            max_cols = cols
+            header_idx = i
+            
+    df = pd.read_csv(io.StringIO(text), skiprows=header_idx, on_bad_lines="skip")
+    df = df.dropna(how="all").dropna(axis=1, how="all")
+    return df
 
 # Sidebar for API Key and File Uploads
 with st.sidebar:
@@ -17,9 +37,8 @@ with st.sidebar:
     api_key = st.text_input("Enter Gemini API Key", type="password")
     uploaded_csv = st.file_uploader("Upload Bank Statement (.csv)", type=["csv"])
     uploaded_pdfs = st.file_uploader("Upload Receipts / Warranties (.pdf)", type=["pdf"], accept_multiple_files=True)
-    st.info("Privacy Tip: Remove your account number/name from the CSV before uploading.")
+    st.info("Privacy Tip: Your data is processed in memory and never saved.")
 
-# Load embedding and reranker models once (cached for speed)
 @st.cache_resource
 def load_models():
     embed_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -31,9 +50,12 @@ embed_model, ranker = load_models()
 # Process Bank Statement CSV
 df_statement = None
 if uploaded_csv:
-    df_statement = pd.read_csv(uploaded_csv)
-    with st.expander("Preview Uploaded Bank Statement"):
-        st.dataframe(df_statement.head(10))
+    try:
+        df_statement = load_indian_bank_csv(uploaded_csv)
+        with st.expander("Preview Detected Bank Transactions"):
+            st.dataframe(df_statement.head(15))
+    except Exception as e:
+        st.error(f"Could not read CSV format: {e}")
 
 # Process PDFs into chunks
 pdf_chunks = []
@@ -51,7 +73,9 @@ if uploaded_pdfs:
     st.sidebar.success(f"Indexed {len(pdf_chunks)} pages from {len(uploaded_pdfs)} PDF(s).")
 
 # Chat Interface
-query = st.text_input("Ask a question (e.g., 'How much did I spend on Swiggy vs Zomato?' or 'When does my warranty expire?')")
+query = st.text_input(
+    "Ask anything (e.g., 'Diversify all my expenses into categories with totals' or 'Find my laptop warranty')"
+)
 
 if st.button("Analyze") and query:
     if not api_key:
@@ -63,11 +87,11 @@ if st.button("Analyze") and query:
 
     client = genai.Client(api_key=api_key)
     
-    with st.spinner("Running Hybrid Search & Financial Analysis..."):
+    with st.spinner("Running Hybrid Search & Full Financial Diversification..."):
         # 1. Prepare CSV Data Context
         statement_context = ""
         if df_statement is not None:
-            statement_context = f"BANK STATEMENT TABLE (CSV):\n{df_statement.to_string(index=False)}\n\n"
+            statement_context = f"BANK STATEMENT TRANSACTIONS:\n{df_statement.to_string(index=False)}\n\n"
 
         # 2. Run Hybrid RAG (BM25 + Dense Vector + FlashRank Re-ranker) on PDFs
         pdf_context = ""
@@ -88,14 +112,15 @@ if st.button("Analyze") and query:
             reranked_sources = ranker.rerank(RerankRequest(query=query, passages=passages))[:3]
             pdf_context = "VERIFIED RECEIPT EXCERPTS:\n" + "\n".join([f"[{r['meta']}]: {r['text']}" for r in reranked_sources])
 
-        # 3. Generate Structured Response
-        prompt = f"""You are an AI Personal Finance & Document Analyst.
-        Use ONLY the provided data below to answer the user's question.
+        # 3. Comprehensive Financial & Document Analysis Prompt
+        prompt = f"""You are an expert Personal Finance & Document Analyst.
+        Use ONLY the provided data below to answer the user's question accurately.
         
         Rules:
-        1. If analyzing bank statement spending, categorize every relevant transaction clearly (e.g., Food Delivery: Swiggy/Zomato, Travel, Shopping, Bills), show the exact individual transactions matched, and compute exact totals and percentages in INR (₹).
-        2. If answering from PDF receipts/warranties, cite the exact PDF filename and page number.
-        3. Format the output cleanly using Markdown tables and bullet points.
+        1. When analyzing bank statement expenses, examine EVERY debit/withdrawal transaction and diversify ALL of them into logical categories (e.g., Food & Dining, Groceries, Online Shopping, Travel & Fuel, Bills & Utilities, Rent/Housing, Health/Medical, Entertainment/Subscriptions, Peer-to-Peer UPI Transfers, and Other).
+        2. Ignore credits/deposits unless specifically asked about income, and clearly separate Total Credits vs. Total Debits.
+        3. Present a clean Markdown summary table showing: Category | Number of Transactions | Total Amount (INR ₹) | % of Total Spending, followed by key insights (like top merchants or largest single expense).
+        4. If answering from PDF receipts/warranties, cite the exact PDF filename and page number.
 
         {statement_context}
         {pdf_context}
