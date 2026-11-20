@@ -1,0 +1,7 @@
+streamlit
+pandas
+pypdf
+rank_bm25
+sentence-transformers
+flashrank
+google-genai
