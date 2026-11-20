@@ -128,7 +128,7 @@ if st.button("Analyze") and query:
         User Question: {query}
         """
 
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        response = client.models.generate_content(model="gemini-3.0-flash", contents=prompt)
         
         st.subheader("Analysis Result")
         st.markdown(response.text)
